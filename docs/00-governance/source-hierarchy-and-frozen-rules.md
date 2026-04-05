@@ -1,4 +1,5 @@
 # Meridian Source Hierarchy and Frozen Rules
+
 ## Source Hierarchy
 
 1. Frozen Step 1–6 Meridian documents = primary design authority
