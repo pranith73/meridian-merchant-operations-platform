@@ -9,7 +9,7 @@ public class Merchant {
     private UUID merchantId;
     private String legalName;
     private String displayName;
-    private String merchantStatus; // e.g. ACTIVE, SUSPENDED, CLOSED
+    private MerchantStatus merchantStatus; // e.g. ACTIVE, SUSPENDED, CLOSED
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -24,8 +24,8 @@ public class Merchant {
     public String getDisplayName() { return displayName; }
     public void setDisplayName(String displayName) { this.displayName = displayName; }
 
-    public String getMerchantStatus() { return merchantStatus; }
-    public void setMerchantStatus(String merchantStatus) { this.merchantStatus = merchantStatus; }
+    public MerchantStatus getMerchantStatus() { return merchantStatus; }
+    public void setMerchantStatus(MerchantStatus merchantStatus) { this.merchantStatus = merchantStatus; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
