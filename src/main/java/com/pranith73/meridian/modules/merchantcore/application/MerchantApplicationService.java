@@ -2,12 +2,15 @@ package com.pranith73.meridian.modules.merchantcore.application;
 
 import com.pranith73.meridian.modules.merchantcore.application.request.ChangeMerchantStatusRequest;
 import com.pranith73.meridian.modules.merchantcore.application.request.CreateMerchantRequest;
+import com.pranith73.meridian.modules.merchantcore.application.request.SearchMerchantsRequest;
 import com.pranith73.meridian.modules.merchantcore.application.request.UpdateMerchantProfileRequest;
 import com.pranith73.meridian.modules.merchantcore.domain.Merchant;
 import com.pranith73.meridian.modules.merchantcore.domain.MerchantStatus;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -108,6 +111,51 @@ public class MerchantApplicationService {
         merchant.setUpdatedAt(Instant.now());
 
         return merchant;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Queries
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Returns a single merchant by its id.
+     * Throws if no merchant with that id exists.
+     */
+    public Merchant getMerchantById(UUID merchantId) {
+        validateNotNull(merchantId, "merchantId");
+        return requireMerchant(merchantId);
+    }
+
+    /**
+     * Returns a list of merchants matching the search text.
+     * Matches against legalName and displayName using case-insensitive contains.
+     * If searchText is blank or null, all merchants are returned.
+     */
+    public List<Merchant> searchMerchants(SearchMerchantsRequest request) {
+        String text = (request == null || request.getSearchText() == null)
+                ? ""
+                : request.getSearchText().trim();
+
+        List<Merchant> results = new ArrayList<>();
+        for (Merchant merchant : store.values()) {
+            if (text.isEmpty() || matchesSearchText(merchant, text)) {
+                results.add(merchant);
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Returns true if the merchant's legalName or displayName contains
+     * the search text (case-insensitive).
+     */
+    private boolean matchesSearchText(Merchant merchant, String text) {
+        String lower = text.toLowerCase();
+        boolean legalNameMatches = merchant.getLegalName() != null
+                && merchant.getLegalName().toLowerCase().contains(lower);
+        boolean displayNameMatches = merchant.getDisplayName() != null
+                && merchant.getDisplayName().toLowerCase().contains(lower);
+        return legalNameMatches || displayNameMatches;
     }
 
     // ---------------------------------------------------------------------------
