@@ -9,27 +9,34 @@ import com.pranith73.meridian.modules.merchantcore.domain.MerchantStatus;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /**
- * Handles all write operations for Merchant Core.
+ * Handles all read and write operations for Merchant Core.
  *
  * This is the application service — it enforces business rules and
- * coordinates changes to merchant data. It does not talk to a database yet;
- * an in-memory map is used so the logic can be exercised and tested first.
+ * coordinates changes to merchant data. It delegates storage to
+ * MerchantRepository so it is not tied to any specific storage technology.
  *
  * Allowed operations:
  *   - createMerchant
  *   - updateMerchantProfile
  *   - changeMerchantStatus
+ *   - getMerchantById
+ *   - searchMerchants
  */
 public class MerchantApplicationService {
 
-    // Temporary in-memory store. Replace with a real repository when ready.
-    private final Map<UUID, Merchant> store = new HashMap<>();
+    private final MerchantRepository merchantRepository;
+
+    /**
+     * The repository is passed in (injected) so the service works with any
+     * implementation — in-memory today, a real database tomorrow.
+     */
+    public MerchantApplicationService(MerchantRepository merchantRepository) {
+        this.merchantRepository = merchantRepository;
+    }
 
     // ---------------------------------------------------------------------------
     // Create
@@ -40,6 +47,7 @@ public class MerchantApplicationService {
      * Returns the newly created merchant.
      */
     public Merchant createMerchant(CreateMerchantRequest request) {
+        validateNotNull(request, "request");
         validateNotBlank(request.getLegalName(), "legalName");
         validateNotBlank(request.getDisplayName(), "displayName");
 
@@ -51,8 +59,7 @@ public class MerchantApplicationService {
         merchant.setCreatedAt(Instant.now());
         merchant.setUpdatedAt(Instant.now());
 
-        store.put(merchant.getMerchantId(), merchant);
-        return merchant;
+        return merchantRepository.save(merchant);
     }
 
     // ---------------------------------------------------------------------------
@@ -64,6 +71,7 @@ public class MerchantApplicationService {
      * Both legalName and displayName must be provided and non-blank.
      */
     public Merchant updateMerchantProfile(UpdateMerchantProfileRequest request) {
+        validateNotNull(request, "request");
         validateNotNull(request.getMerchantId(), "merchantId");
         validateNotBlank(request.getLegalName(), "legalName");
         validateNotBlank(request.getDisplayName(), "displayName");
@@ -74,7 +82,7 @@ public class MerchantApplicationService {
         merchant.setDisplayName(request.getDisplayName().trim());
         merchant.setUpdatedAt(Instant.now());
 
-        return merchant;
+        return merchantRepository.save(merchant);
     }
 
     // ---------------------------------------------------------------------------
@@ -94,6 +102,7 @@ public class MerchantApplicationService {
      * All other transitions are rejected.
      */
     public Merchant changeMerchantStatus(ChangeMerchantStatusRequest request) {
+        validateNotNull(request, "request");
         validateNotNull(request.getMerchantId(), "merchantId");
         validateNotNull(request.getNewStatus(), "newStatus");
 
@@ -110,7 +119,7 @@ public class MerchantApplicationService {
         merchant.setMerchantStatus(next);
         merchant.setUpdatedAt(Instant.now());
 
-        return merchant;
+        return merchantRepository.save(merchant);
     }
 
     // ---------------------------------------------------------------------------
@@ -137,7 +146,7 @@ public class MerchantApplicationService {
                 : request.getSearchText().trim();
 
         List<Merchant> results = new ArrayList<>();
-        for (Merchant merchant : store.values()) {
+        for (Merchant merchant : merchantRepository.findAll()) {
             if (text.isEmpty() || matchesSearchText(merchant, text)) {
                 results.add(merchant);
             }
@@ -187,11 +196,8 @@ public class MerchantApplicationService {
 
     /** Looks up a merchant by id and throws if not found. */
     private Merchant requireMerchant(UUID merchantId) {
-        Merchant merchant = store.get(merchantId);
-        if (merchant == null) {
-            throw new IllegalArgumentException("Merchant not found: " + merchantId);
-        }
-        return merchant;
+        return merchantRepository.findById(merchantId)
+                .orElseThrow(() -> new IllegalArgumentException("Merchant not found: " + merchantId));
     }
 
     private void validateNotBlank(String value, String fieldName) {
