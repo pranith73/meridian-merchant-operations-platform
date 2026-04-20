@@ -6,6 +6,10 @@ import com.pranith73.meridian.modules.merchantcore.application.request.SearchMer
 import com.pranith73.meridian.modules.merchantcore.application.request.UpdateMerchantProfileRequest;
 import com.pranith73.meridian.modules.merchantcore.domain.Merchant;
 import com.pranith73.meridian.modules.merchantcore.domain.MerchantStatus;
+import com.pranith73.meridian.shared.audit.AuditRecord;
+import com.pranith73.meridian.shared.audit.AuditSink;
+import com.pranith73.meridian.shared.outbox.OutboxMessage;
+import com.pranith73.meridian.shared.outbox.OutboxSink;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -29,13 +33,20 @@ import java.util.UUID;
 public class MerchantApplicationService {
 
     private final MerchantRepository merchantRepository;
+    private final AuditSink auditSink;
+    private final OutboxSink outboxSink;
 
     /**
-     * The repository is passed in (injected) so the service works with any
-     * implementation — in-memory today, a real database tomorrow.
+     * Dependencies are passed in so the service is not tied to any specific
+     * storage or eventing technology. Swap implementations without touching
+     * the business logic.
      */
-    public MerchantApplicationService(MerchantRepository merchantRepository) {
+    public MerchantApplicationService(MerchantRepository merchantRepository,
+                                      AuditSink auditSink,
+                                      OutboxSink outboxSink) {
         this.merchantRepository = merchantRepository;
+        this.auditSink = auditSink;
+        this.outboxSink = outboxSink;
     }
 
     // ---------------------------------------------------------------------------
@@ -51,15 +62,25 @@ public class MerchantApplicationService {
         validateNotBlank(request.getLegalName(), "legalName");
         validateNotBlank(request.getDisplayName(), "displayName");
 
+        Instant now = Instant.now();
+
         Merchant merchant = new Merchant();
         merchant.setMerchantId(UUID.randomUUID());
         merchant.setLegalName(request.getLegalName().trim());
         merchant.setDisplayName(request.getDisplayName().trim());
         merchant.setMerchantStatus(MerchantStatus.PENDING);
-        merchant.setCreatedAt(Instant.now());
-        merchant.setUpdatedAt(Instant.now());
+        merchant.setCreatedAt(now);
+        merchant.setUpdatedAt(now);
 
-        return merchantRepository.save(merchant);
+        Merchant saved = merchantRepository.save(merchant);
+
+        // Record that a new merchant identity was created in this system.
+        emitAudit("MERCHANT_CREATED", saved.getMerchantId(), now,
+                "legalName=" + saved.getLegalName() + " displayName=" + saved.getDisplayName());
+        emitOutbox("merchant.created", saved.getMerchantId(), now,
+                "{\"merchantId\":\"" + saved.getMerchantId() + "\",\"legalName\":\"" + saved.getLegalName() + "\"}");
+
+        return saved;
     }
 
     // ---------------------------------------------------------------------------
@@ -76,13 +97,22 @@ public class MerchantApplicationService {
         validateNotBlank(request.getLegalName(), "legalName");
         validateNotBlank(request.getDisplayName(), "displayName");
 
-        Merchant merchant = requireMerchant(request.getMerchantId());
+        Instant now = Instant.now();
 
+        Merchant merchant = requireMerchant(request.getMerchantId());
         merchant.setLegalName(request.getLegalName().trim());
         merchant.setDisplayName(request.getDisplayName().trim());
-        merchant.setUpdatedAt(Instant.now());
+        merchant.setUpdatedAt(now);
 
-        return merchantRepository.save(merchant);
+        Merchant saved = merchantRepository.save(merchant);
+
+        // Record that identity fields on an existing merchant were changed.
+        emitAudit("MERCHANT_PROFILE_UPDATED", saved.getMerchantId(), now,
+                "legalName=" + saved.getLegalName() + " displayName=" + saved.getDisplayName());
+        emitOutbox("merchant.profile.updated", saved.getMerchantId(), now,
+                "{\"merchantId\":\"" + saved.getMerchantId() + "\",\"legalName\":\"" + saved.getLegalName() + "\"}");
+
+        return saved;
     }
 
     // ---------------------------------------------------------------------------
@@ -116,10 +146,19 @@ public class MerchantApplicationService {
                 "Status transition from " + current + " to " + next + " is not allowed.");
         }
 
+        Instant now = Instant.now();
         merchant.setMerchantStatus(next);
-        merchant.setUpdatedAt(Instant.now());
+        merchant.setUpdatedAt(now);
 
-        return merchantRepository.save(merchant);
+        Merchant saved = merchantRepository.save(merchant);
+
+        // Record that the merchant's governed lifecycle status changed.
+        emitAudit("MERCHANT_STATUS_CHANGED", saved.getMerchantId(), now,
+                "from=" + current + " to=" + next);
+        emitOutbox("merchant.status.changed", saved.getMerchantId(), now,
+                "{\"merchantId\":\"" + saved.getMerchantId() + "\",\"from\":\"" + current + "\",\"to\":\"" + next + "\"}");
+
+        return saved;
     }
 
     // ---------------------------------------------------------------------------
@@ -188,6 +227,33 @@ public class MerchantApplicationService {
             default:
                 return false;
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Audit and outbox helpers
+    // ---------------------------------------------------------------------------
+
+    private void emitAudit(String actionType, UUID merchantId, Instant occurredAt, String detail) {
+        auditSink.record(new AuditRecord(
+                actionType,
+                "MERCHANT",
+                merchantId.toString(),
+                "SYSTEM",
+                "LOCAL",
+                occurredAt,
+                detail
+        ));
+    }
+
+    private void emitOutbox(String eventType, UUID merchantId, Instant occurredAt, String payload) {
+        outboxSink.save(new OutboxMessage(
+                eventType,
+                "MERCHANT",
+                merchantId.toString(),
+                payload,
+                "LOCAL",
+                occurredAt
+        ));
     }
 
     // ---------------------------------------------------------------------------
