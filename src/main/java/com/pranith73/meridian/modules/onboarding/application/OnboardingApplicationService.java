@@ -11,8 +11,13 @@ import com.pranith73.meridian.modules.onboarding.domain.DocumentType;
 import com.pranith73.meridian.modules.onboarding.domain.MerchantApplication;
 import com.pranith73.meridian.modules.onboarding.domain.RequiredDocument;
 import com.pranith73.meridian.modules.onboarding.domain.RequiredDocumentStatus;
+import com.pranith73.meridian.shared.audit.AuditRecord;
+import com.pranith73.meridian.shared.audit.AuditSink;
 import com.pranith73.meridian.shared.error.ResourceNotFoundException;
+import com.pranith73.meridian.shared.outbox.OutboxMessage;
+import com.pranith73.meridian.shared.outbox.OutboxSink;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -36,9 +41,15 @@ import java.util.UUID;
 public class OnboardingApplicationService {
 
     private final OnboardingApplicationRepository repository;
+    private final AuditSink auditSink;
+    private final OutboxSink outboxSink;
 
-    public OnboardingApplicationService(OnboardingApplicationRepository repository) {
+    public OnboardingApplicationService(OnboardingApplicationRepository repository,
+                                        AuditSink auditSink,
+                                        OutboxSink outboxSink) {
         this.repository = repository;
+        this.auditSink = auditSink;
+        this.outboxSink = outboxSink;
     }
 
     // ---------------------------------------------------------------------------
@@ -58,7 +69,17 @@ public class OnboardingApplicationService {
                 request.getRequestedProducts()
         );
 
-        return repository.save(application);
+        MerchantApplication saved = repository.save(application);
+        Instant now = saved.getCreatedAt();
+
+        // Audit facts record that a governed action happened, for traceability.
+        emitAudit("ONBOARDING_APPLICATION_CREATED", saved.getApplicationId(), now,
+                "status=" + saved.getApplicationStatus());
+        // Outbox facts are durable handoff signals — not direct cross-module writes.
+        emitOutbox("onboarding.application.created", saved.getApplicationId(), now,
+                "{\"applicationId\":\"" + saved.getApplicationId() + "\"}");
+
+        return saved;
     }
 
     // ---------------------------------------------------------------------------
@@ -79,7 +100,15 @@ public class OnboardingApplicationService {
         // submit() enforces the DRAFT -> SUBMITTED transition rule.
         application.submit();
 
-        return repository.save(application);
+        MerchantApplication saved = repository.save(application);
+        Instant now = saved.getUpdatedAt();
+
+        emitAudit("ONBOARDING_APPLICATION_SUBMITTED", saved.getApplicationId(), now,
+                "status=" + saved.getApplicationStatus());
+        emitOutbox("onboarding.application.submitted", saved.getApplicationId(), now,
+                "{\"applicationId\":\"" + saved.getApplicationId() + "\"}");
+
+        return saved;
     }
 
     // ---------------------------------------------------------------------------
@@ -100,7 +129,15 @@ public class OnboardingApplicationService {
         // startReview() enforces SUBMITTED/NEEDS_INFO -> UNDER_REVIEW.
         application.startReview(assignedAnalystId);
 
-        return repository.save(application);
+        MerchantApplication saved = repository.save(application);
+        Instant now = saved.getUpdatedAt();
+
+        emitAudit("ONBOARDING_REVIEW_STARTED", saved.getApplicationId(), now,
+                "analystId=" + assignedAnalystId);
+        emitOutbox("onboarding.review.started", saved.getApplicationId(), now,
+                "{\"applicationId\":\"" + saved.getApplicationId() + "\",\"analystId\":\"" + assignedAnalystId + "\"}");
+
+        return saved;
     }
 
     // ---------------------------------------------------------------------------
@@ -123,7 +160,15 @@ public class OnboardingApplicationService {
         // requestChanges() enforces UNDER_REVIEW -> NEEDS_INFO.
         application.requestChanges(request.getReasonSummary());
 
-        return repository.save(application);
+        MerchantApplication saved = repository.save(application);
+        Instant now = saved.getUpdatedAt();
+
+        emitAudit("ONBOARDING_CHANGES_REQUESTED", saved.getApplicationId(), now,
+                "reason=" + request.getReasonSummary());
+        emitOutbox("onboarding.changes.requested", saved.getApplicationId(), now,
+                "{\"applicationId\":\"" + saved.getApplicationId() + "\"}");
+
+        return saved;
     }
 
     // ---------------------------------------------------------------------------
@@ -151,6 +196,13 @@ public class OnboardingApplicationService {
         );
 
         MerchantApplication saved = repository.save(application);
+        Instant now = saved.getUpdatedAt();
+
+        emitAudit("ONBOARDING_APPLICATION_APPROVED", saved.getApplicationId(), now,
+                "decidedBy=" + request.getDecidedBy());
+        emitOutbox("onboarding.application.approved", saved.getApplicationId(), now,
+                "{\"applicationId\":\"" + saved.getApplicationId() + "\",\"decidedBy\":\"" + request.getDecidedBy() + "\"}");
+
         return new ApplicationDecisionResult(saved, decision);
     }
 
@@ -179,6 +231,13 @@ public class OnboardingApplicationService {
         );
 
         MerchantApplication saved = repository.save(application);
+        Instant now = saved.getUpdatedAt();
+
+        emitAudit("ONBOARDING_APPLICATION_REJECTED", saved.getApplicationId(), now,
+                "decidedBy=" + request.getDecidedBy());
+        emitOutbox("onboarding.application.rejected", saved.getApplicationId(), now,
+                "{\"applicationId\":\"" + saved.getApplicationId() + "\",\"decidedBy\":\"" + request.getDecidedBy() + "\"}");
+
         return new ApplicationDecisionResult(saved, decision);
     }
 
@@ -194,6 +253,8 @@ public class OnboardingApplicationService {
      * so activation can safely proceed without surprises.
      *
      * This method does not change application status or trigger any downstream action.
+     * An outbox fact is emitted only when the result is ready, so downstream systems
+     * can act without Onboarding making direct cross-module calls.
      */
     public ActivationReadinessResult checkActivationReadiness(UUID applicationId,
                                                                List<RequiredDocument> requiredDocuments) {
@@ -234,7 +295,43 @@ public class OnboardingApplicationService {
                     "One or more required documents are not yet accepted: " + unaccepted);
         }
 
+        // All checks passed — emit facts so downstream can act without a direct call.
+        Instant now = Instant.now();
+        emitAudit("ONBOARDING_APPLICATION_READY_FOR_ACTIVATION", applicationId, now,
+                "applicationId=" + applicationId);
+        emitOutbox("onboarding.application.ready_for_activation", applicationId, now,
+                "{\"applicationId\":\"" + applicationId + "\"}");
+
         return ActivationReadinessResult.ready(applicationId);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Audit and outbox helpers
+    // ---------------------------------------------------------------------------
+
+    // Audit facts are for traceability — they record that a governed action happened.
+    private void emitAudit(String actionType, UUID applicationId, Instant occurredAt, String detail) {
+        auditSink.record(new AuditRecord(
+                actionType,
+                "MERCHANT_APPLICATION",
+                applicationId.toString(),
+                "SYSTEM",
+                "LOCAL",
+                occurredAt,
+                detail
+        ));
+    }
+
+    // Outbox facts are durable handoff signals — not direct cross-module writes.
+    private void emitOutbox(String eventType, UUID applicationId, Instant occurredAt, String payload) {
+        outboxSink.save(new OutboxMessage(
+                eventType,
+                "MERCHANT_APPLICATION",
+                applicationId.toString(),
+                payload,
+                "LOCAL",
+                occurredAt
+        ));
     }
 
     // ---------------------------------------------------------------------------
