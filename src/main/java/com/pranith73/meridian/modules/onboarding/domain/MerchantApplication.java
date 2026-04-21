@@ -181,4 +181,34 @@ public class MerchantApplication {
         this.applicationStatus = ApplicationStatus.NEEDS_INFO;
         this.updatedAt = Instant.now();
     }
+
+    /**
+     * Records an approval decision for this application.
+     * Only allowed while the application is UNDER_REVIEW — the analyst must
+     * have been actively reviewing before a positive decision can be recorded.
+     * Approval is a governed transition; it cannot be set directly on the status field.
+     */
+    public void approve() {
+        if (applicationStatus != ApplicationStatus.UNDER_REVIEW) {
+            throw new IllegalStateException(
+                    "Only an UNDER_REVIEW application can be approved, current status: " + applicationStatus);
+        }
+        this.applicationStatus = ApplicationStatus.APPROVED;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Records a rejection decision for this application.
+     * Only allowed while the application is UNDER_REVIEW — the analyst must
+     * have been actively reviewing before a negative decision can be recorded.
+     * Rejection is a governed transition; it cannot be set directly on the status field.
+     */
+    public void reject() {
+        if (applicationStatus != ApplicationStatus.UNDER_REVIEW) {
+            throw new IllegalStateException(
+                    "Only an UNDER_REVIEW application can be rejected, current status: " + applicationStatus);
+        }
+        this.applicationStatus = ApplicationStatus.REJECTED;
+        this.updatedAt = Instant.now();
+    }
 }

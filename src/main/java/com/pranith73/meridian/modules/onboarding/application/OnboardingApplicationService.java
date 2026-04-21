@@ -1,7 +1,10 @@
 package com.pranith73.meridian.modules.onboarding.application;
 
 import com.pranith73.meridian.modules.onboarding.application.request.CreateApplicationRequest;
+import com.pranith73.meridian.modules.onboarding.application.request.DecisionRequest;
 import com.pranith73.meridian.modules.onboarding.application.request.RequestChangesRequest;
+import com.pranith73.meridian.modules.onboarding.application.result.ApplicationDecisionResult;
+import com.pranith73.meridian.modules.onboarding.domain.ActivationDecision;
 import com.pranith73.meridian.modules.onboarding.domain.MerchantApplication;
 import com.pranith73.meridian.shared.error.ResourceNotFoundException;
 
@@ -20,6 +23,8 @@ import java.util.UUID;
  *   - submitApplication
  *   - startReview
  *   - requestChanges
+ *   - approveApplication
+ *   - rejectApplication
  */
 public class OnboardingApplicationService {
 
@@ -115,6 +120,62 @@ public class OnboardingApplicationService {
     }
 
     // ---------------------------------------------------------------------------
+    // Approve
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Records an approval decision for an UNDER_REVIEW application.
+     * Creates ActivationDecision evidence and returns both the updated
+     * application and the decision together in ApplicationDecisionResult.
+     * ActivationDecision is not persisted separately yet; that comes later.
+     */
+    public ApplicationDecisionResult approveApplication(DecisionRequest request) {
+        validateDecisionRequest(request);
+
+        MerchantApplication application = requireApplication(request.getApplicationId());
+
+        // approve() enforces the UNDER_REVIEW -> APPROVED transition.
+        application.approve();
+
+        ActivationDecision decision = ActivationDecision.approve(
+                application.getApplicationId(),
+                request.getDecisionReasonSummary(),
+                request.getDecidedBy()
+        );
+
+        MerchantApplication saved = repository.save(application);
+        return new ApplicationDecisionResult(saved, decision);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Reject
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Records a rejection decision for an UNDER_REVIEW application.
+     * Creates ActivationDecision evidence and returns both the updated
+     * application and the decision together in ApplicationDecisionResult.
+     * ActivationDecision is not persisted separately yet; that comes later.
+     */
+    public ApplicationDecisionResult rejectApplication(DecisionRequest request) {
+        validateDecisionRequest(request);
+
+        MerchantApplication application = requireApplication(request.getApplicationId());
+
+        // reject() enforces the UNDER_REVIEW -> REJECTED transition.
+        application.reject();
+
+        ActivationDecision decision = ActivationDecision.reject(
+                application.getApplicationId(),
+                request.getDecisionReasonSummary(),
+                request.getDecidedBy()
+        );
+
+        MerchantApplication saved = repository.save(application);
+        return new ApplicationDecisionResult(saved, decision);
+    }
+
+    // ---------------------------------------------------------------------------
     // Internal helpers
     // ---------------------------------------------------------------------------
 
@@ -122,5 +183,14 @@ public class OnboardingApplicationService {
         return repository.findById(applicationId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Onboarding application not found: " + applicationId));
+    }
+
+    private void validateDecisionRequest(DecisionRequest request) {
+        if (request == null) throw new IllegalArgumentException("request must not be null");
+        if (request.getApplicationId() == null) throw new IllegalArgumentException("applicationId must not be null");
+        if (request.getDecidedBy() == null) throw new IllegalArgumentException("decidedBy must not be null");
+        if (request.getDecisionReasonSummary() == null || request.getDecisionReasonSummary().isBlank()) {
+            throw new IllegalArgumentException("decisionReasonSummary must not be blank");
+        }
     }
 }
