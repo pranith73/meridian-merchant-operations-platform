@@ -143,4 +143,42 @@ public class MerchantApplication {
         this.submittedAt = now;
         this.updatedAt = now;
     }
+
+    /**
+     * Begins formal review of this application and assigns it to an analyst.
+     * Allowed from SUBMITTED (first review pass) or NEEDS_INFO (re-review after
+     * the applicant has responded). All other statuses are rejected so the
+     * workflow cannot skip or loop backwards outside these two entry points.
+     */
+    public void startReview(UUID assignedAnalystId) {
+        if (assignedAnalystId == null) throw new IllegalArgumentException("assignedAnalystId must not be null");
+
+        if (applicationStatus != ApplicationStatus.SUBMITTED
+                && applicationStatus != ApplicationStatus.NEEDS_INFO) {
+            throw new IllegalStateException(
+                    "Review can only be started from SUBMITTED or NEEDS_INFO, current status: " + applicationStatus);
+        }
+        this.assignedAnalystId = assignedAnalystId;
+        this.applicationStatus = ApplicationStatus.UNDER_REVIEW;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Flags this application as needing additional information from the applicant.
+     * Only allowed while the application is UNDER_REVIEW — the analyst must be
+     * actively reviewing before they can request changes.
+     * The reason is passed at the service layer for logging or notification;
+     * this method updates workflow state only.
+     */
+    public void requestChanges(String reasonSummary) {
+        if (reasonSummary == null || reasonSummary.isBlank()) {
+            throw new IllegalArgumentException("reasonSummary must not be blank");
+        }
+        if (applicationStatus != ApplicationStatus.UNDER_REVIEW) {
+            throw new IllegalStateException(
+                    "Changes can only be requested while UNDER_REVIEW, current status: " + applicationStatus);
+        }
+        this.applicationStatus = ApplicationStatus.NEEDS_INFO;
+        this.updatedAt = Instant.now();
+    }
 }

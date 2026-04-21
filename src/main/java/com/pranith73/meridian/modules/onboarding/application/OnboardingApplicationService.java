@@ -1,6 +1,7 @@
 package com.pranith73.meridian.modules.onboarding.application;
 
 import com.pranith73.meridian.modules.onboarding.application.request.CreateApplicationRequest;
+import com.pranith73.meridian.modules.onboarding.application.request.RequestChangesRequest;
 import com.pranith73.meridian.modules.onboarding.domain.MerchantApplication;
 import com.pranith73.meridian.shared.error.ResourceNotFoundException;
 
@@ -17,6 +18,8 @@ import java.util.UUID;
  * Allowed operations:
  *   - createApplication
  *   - submitApplication
+ *   - startReview
+ *   - requestChanges
  */
 public class OnboardingApplicationService {
 
@@ -65,5 +68,59 @@ public class OnboardingApplicationService {
         application.submit();
 
         return repository.save(application);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Start review
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Assigns an analyst and moves the application into UNDER_REVIEW.
+     * Allowed from SUBMITTED or NEEDS_INFO.
+     * Throws if the application is not found or the transition is not allowed.
+     */
+    public MerchantApplication startReview(UUID applicationId, UUID assignedAnalystId) {
+        if (applicationId == null)     throw new IllegalArgumentException("applicationId must not be null");
+        if (assignedAnalystId == null) throw new IllegalArgumentException("assignedAnalystId must not be null");
+
+        MerchantApplication application = requireApplication(applicationId);
+
+        // startReview() enforces SUBMITTED/NEEDS_INFO -> UNDER_REVIEW.
+        application.startReview(assignedAnalystId);
+
+        return repository.save(application);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Request changes
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Flags the application as NEEDS_INFO and records the reason the analyst
+     * requires additional information from the applicant.
+     * Only allowed while the application is UNDER_REVIEW.
+     * Throws if the application is not found or the transition is not allowed.
+     */
+    public MerchantApplication requestChanges(RequestChangesRequest request) {
+        if (request == null)                                          throw new IllegalArgumentException("request must not be null");
+        if (request.getApplicationId() == null)                       throw new IllegalArgumentException("applicationId must not be null");
+        if (request.getReasonSummary() == null || request.getReasonSummary().isBlank()) throw new IllegalArgumentException("reasonSummary must not be blank");
+
+        MerchantApplication application = requireApplication(request.getApplicationId());
+
+        // requestChanges() enforces UNDER_REVIEW -> NEEDS_INFO.
+        application.requestChanges(request.getReasonSummary());
+
+        return repository.save(application);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Internal helpers
+    // ---------------------------------------------------------------------------
+
+    private MerchantApplication requireApplication(UUID applicationId) {
+        return repository.findById(applicationId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Onboarding application not found: " + applicationId));
     }
 }
