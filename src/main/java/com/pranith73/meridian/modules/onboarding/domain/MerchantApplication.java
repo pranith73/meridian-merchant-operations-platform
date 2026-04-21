@@ -120,7 +120,27 @@ public class MerchantApplication {
 
     public Instant getUpdatedAt() { return updatedAt; }
 
-    // Status transitions and field updates will be added as explicit named methods
-    // (e.g. submit(), startReview()) in later tasks. Direct setters are intentionally
-    // absent so workflow state can only change through governed transition methods.
+    // ---------------------------------------------------------------------------
+    // Workflow transitions
+    //
+    // Status changes must go through named methods like submit() rather than
+    // public setters. This ensures that every transition can enforce its own
+    // preconditions and that no caller can jump the workflow to an arbitrary state.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Advances this application from DRAFT to SUBMITTED.
+     * Calling submit() on an application that is already SUBMITTED or in any
+     * later state is rejected — submission is a one-time governed action.
+     */
+    public void submit() {
+        if (applicationStatus != ApplicationStatus.DRAFT) {
+            throw new IllegalStateException(
+                    "Only a DRAFT application can be submitted, current status: " + applicationStatus);
+        }
+        Instant now = Instant.now();
+        this.applicationStatus = ApplicationStatus.SUBMITTED;
+        this.submittedAt = now;
+        this.updatedAt = now;
+    }
 }
