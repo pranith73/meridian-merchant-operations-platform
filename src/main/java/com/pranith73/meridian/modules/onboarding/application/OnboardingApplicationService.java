@@ -3,11 +3,18 @@ package com.pranith73.meridian.modules.onboarding.application;
 import com.pranith73.meridian.modules.onboarding.application.request.CreateApplicationRequest;
 import com.pranith73.meridian.modules.onboarding.application.request.DecisionRequest;
 import com.pranith73.meridian.modules.onboarding.application.request.RequestChangesRequest;
+import com.pranith73.meridian.modules.onboarding.application.result.ActivationReadinessResult;
 import com.pranith73.meridian.modules.onboarding.application.result.ApplicationDecisionResult;
 import com.pranith73.meridian.modules.onboarding.domain.ActivationDecision;
+import com.pranith73.meridian.modules.onboarding.domain.ApplicationStatus;
+import com.pranith73.meridian.modules.onboarding.domain.DocumentType;
 import com.pranith73.meridian.modules.onboarding.domain.MerchantApplication;
+import com.pranith73.meridian.modules.onboarding.domain.RequiredDocument;
+import com.pranith73.meridian.modules.onboarding.domain.RequiredDocumentStatus;
 import com.pranith73.meridian.shared.error.ResourceNotFoundException;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -173,6 +180,61 @@ public class OnboardingApplicationService {
 
         MerchantApplication saved = repository.save(application);
         return new ApplicationDecisionResult(saved, decision);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Activation readiness check
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Checks whether an APPROVED application has all required documents accepted.
+     *
+     * Approval is a business decision — it means the reviewer accepted the application.
+     * Readiness is the gate that follows — it confirms every document blocker is cleared
+     * so activation can safely proceed without surprises.
+     *
+     * This method does not change application status or trigger any downstream action.
+     */
+    public ActivationReadinessResult checkActivationReadiness(UUID applicationId,
+                                                               List<RequiredDocument> requiredDocuments) {
+        if (applicationId == null)      throw new IllegalArgumentException("applicationId must not be null");
+        if (requiredDocuments == null)  throw new IllegalArgumentException("requiredDocuments must not be null");
+
+        MerchantApplication application = requireApplication(applicationId);
+
+        // Verify all provided documents belong to this application.
+        for (RequiredDocument doc : requiredDocuments) {
+            if (!applicationId.equals(doc.getApplicationId())) {
+                throw new IllegalArgumentException(
+                        "Document " + doc.getRequiredDocumentId() + " belongs to a different application");
+            }
+        }
+
+        // Application must be APPROVED before readiness can be considered.
+        if (application.getApplicationStatus() != ApplicationStatus.APPROVED) {
+            return ActivationReadinessResult.notReady(
+                    applicationId,
+                    List.of(),
+                    "Application must be APPROVED before readiness can be assessed, "
+                            + "current status: " + application.getApplicationStatus());
+        }
+
+        // Collect any document requirements that are not yet ACCEPTED.
+        List<DocumentType> unaccepted = new ArrayList<>();
+        for (RequiredDocument doc : requiredDocuments) {
+            if (doc.getRequirementStatus() != RequiredDocumentStatus.ACCEPTED) {
+                unaccepted.add(doc.getDocumentType());
+            }
+        }
+
+        if (!unaccepted.isEmpty()) {
+            return ActivationReadinessResult.notReady(
+                    applicationId,
+                    unaccepted,
+                    "One or more required documents are not yet accepted: " + unaccepted);
+        }
+
+        return ActivationReadinessResult.ready(applicationId);
     }
 
     // ---------------------------------------------------------------------------
